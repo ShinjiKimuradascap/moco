@@ -1511,9 +1511,12 @@ class AgentRuntime:
                             "messages": messages,
                             "tools": tools,
                         }
-                        if self.provider != LLMProvider.OPENROUTER:
+                        if self.provider not in (LLMProvider.OPENROUTER, LLMProvider.ZAI):
                             create_kwargs["reasoning_effort"] = "medium"
                             create_kwargs["parallel_tool_calls"] = True
+                        # ZAI: explicitly enable tool calling
+                        if self.provider == LLMProvider.ZAI and tools:
+                            create_kwargs["tool_choice"] = "auto"
                         response = await self.openai_client.chat.completions.create(**create_kwargs)
                     else:
                         create_kwargs = {
@@ -1525,6 +1528,9 @@ class AgentRuntime:
                         # parallel_tool_calls not supported by OpenRouter and ZAI
                         if self.provider not in (LLMProvider.OPENROUTER, LLMProvider.ZAI):
                             create_kwargs["parallel_tool_calls"] = True
+                        # ZAI: explicitly enable tool calling
+                        if self.provider == LLMProvider.ZAI and tools:
+                            create_kwargs["tool_choice"] = "auto"
                         response = await self.openai_client.chat.completions.create(**create_kwargs)
                     # usage recording
                     if hasattr(response, "usage") and response.usage:
