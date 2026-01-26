@@ -390,7 +390,20 @@ def on_message(c: NewClient, ev: MessageEv):
                             elif a_type == "video":
                                 client.send_video(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
                             elif a_type == "audio":
-                                client.send_audio(sender_jid, a_path)
+                                # WAV等はMP3に変換してから送信
+                                audio_path = a_path
+                                if a_path.lower().endswith(('.wav', '.flac', '.aiff')):
+                                    import subprocess
+                                    import tempfile
+                                    mp3_path = os.path.join(tempfile.gettempdir(), os.path.basename(a_path).rsplit('.', 1)[0] + '.mp3')
+                                    try:
+                                        subprocess.run(['ffmpeg', '-y', '-i', a_path, '-b:a', '192k', mp3_path], 
+                                                      check=True, capture_output=True)
+                                        audio_path = mp3_path
+                                        print(f"🔄 音声変換: {a_path} → {mp3_path}")
+                                    except Exception as conv_err:
+                                        print(f"⚠️ 音声変換失敗、元ファイルで送信: {conv_err}")
+                                client.send_audio(sender_jid, audio_path)
                             else:
                                 client.send_document(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
                             artifact_count += 1
