@@ -1215,11 +1215,12 @@ class AgentRuntime:
         # Tool settings
         tools = self.openai_tools if self.openai_tools else None
 
-        # Z.ai doesn't support tool calls in streaming mode for glm-4.7
+        # Z.ai doesn't support tool_stream in streaming mode for glm-4.7
         # Force non-streaming when using tools to ensure tool calls work correctly
         use_stream = self.stream
-        if self.provider == LLMProvider.ZAI and tools:
-            use_stream = False
+        # USER REQUEST: Enable streaming for Zai
+        # if self.provider == LLMProvider.ZAI and tools:
+        #     use_stream = False
 
         # Commented out max_iterations: managed by token limit
         # iterations = 0
@@ -1511,13 +1512,21 @@ class AgentRuntime:
                             "messages": messages,
                             "tools": tools,
                         }
-                        if self.provider not in (LLMProvider.OPENROUTER, LLMProvider.ZAI):
+                        if self.provider != LLMProvider.OPENROUTER:
                             create_kwargs["reasoning_effort"] = "medium"
                             create_kwargs["parallel_tool_calls"] = True
-                        # ZAI: explicitly enable tool calling
+                        # ZAI: force tool calling when tools are available (otherwise it may only "suggest" tools in text)
                         if self.provider == LLMProvider.ZAI and tools:
-                            create_kwargs["tool_choice"] = "auto"
-                        response = await self.openai_client.chat.completions.create(**create_kwargs)
+                            create_kwargs["tool_choice"] = "required"
+                        try:
+                            response = await self.openai_client.chat.completions.create(**create_kwargs)
+                        except Exception:
+                            # Some OpenAI-compatible providers may not support "required"
+                            if self.provider == LLMProvider.ZAI and tools and "tool_choice" in create_kwargs:
+                                create_kwargs["tool_choice"] = "auto"
+                                response = await self.openai_client.chat.completions.create(**create_kwargs)
+                            else:
+                                raise
                     else:
                         create_kwargs = {
                             "model": self.model_name,
@@ -1525,13 +1534,19 @@ class AgentRuntime:
                             "tools": tools,
                             "temperature": 0.7,
                         }
-                        # parallel_tool_calls not supported by OpenRouter and ZAI
-                        if self.provider not in (LLMProvider.OPENROUTER, LLMProvider.ZAI):
+                        if self.provider != LLMProvider.OPENROUTER:
                             create_kwargs["parallel_tool_calls"] = True
-                        # ZAI: explicitly enable tool calling
+                        # ZAI: force tool calling when tools are available (otherwise it may only "suggest" tools in text)
                         if self.provider == LLMProvider.ZAI and tools:
-                            create_kwargs["tool_choice"] = "auto"
-                        response = await self.openai_client.chat.completions.create(**create_kwargs)
+                            create_kwargs["tool_choice"] = "required"
+                        try:
+                            response = await self.openai_client.chat.completions.create(**create_kwargs)
+                        except Exception:
+                            if self.provider == LLMProvider.ZAI and tools and "tool_choice" in create_kwargs:
+                                create_kwargs["tool_choice"] = "auto"
+                                response = await self.openai_client.chat.completions.create(**create_kwargs)
+                            else:
+                                raise
                     # usage recording
                     if hasattr(response, "usage") and response.usage:
                         self.last_usage = {
@@ -1547,12 +1562,6 @@ class AgentRuntime:
             if not use_stream:
                 choice = response.choices[0]
                 message = choice.message
-                # Debug: Log ZAI response
-                if self.provider == LLMProvider.ZAI and self.verbose:
-                    print(f"[ZAI Debug] message.content: {message.content}")
-                    print(f"[ZAI Debug] message.tool_calls: {message.tool_calls}")
-                    if hasattr(message, "reasoning_content"):
-                        print(f"[ZAI Debug] reasoning_content: {message.reasoning_content}")
             else:
                 continue  # Already processed above for streaming
 
@@ -1618,10 +1627,6 @@ class AgentRuntime:
                     # Check in extra fields (standard OpenAI python lib behavior for unknown fields)
                     elif hasattr(message, "model_extra") and message.model_extra and "reasoning_content" in message.model_extra:
                         content = message.model_extra["reasoning_content"]
-                
-                # Non-streaming mode: send content via progress_callback for UI display
-                if self.progress_callback and content:
-                    self.progress_callback(event_type="text", text=content)
                         
                 return content
 
