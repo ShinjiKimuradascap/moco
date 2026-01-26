@@ -35,7 +35,7 @@ from moco.core import Orchestrator
 # 初期化
 orchestrator = Orchestrator(
     profile="development",    # プロファイル名
-    provider="gemini",        # LLM プロバイダ
+    provider="openrouter",        # LLM プロバイダ
     model="gemini-2.0-flash", # モデル名
     stream=True,              # ストリーミング出力
     verbose=False,            # 詳細ログ
@@ -135,7 +135,7 @@ from moco.tools import TOOL_MAP
 runtime = AgentRuntime(
     config=config,
     tool_map=TOOL_MAP,
-    provider="gemini",
+    provider="openrouter",
     stream=True
 )
 
@@ -204,7 +204,7 @@ messages = [
 # 必要に応じて圧縮
 compressed, was_compressed = compressor.compress_if_needed(
     messages,
-    provider="gemini"
+    provider="openrouter"
 )
 
 if was_compressed:
@@ -350,7 +350,7 @@ with telemetry.span("my_operation", {"key": "value"}):
 
 # メトリクス記録
 telemetry.record_llm_call(
-    provider="gemini",
+    provider="openrouter",
     model="gemini-2.0-flash",
     input_tokens=100,
     output_tokens=200,

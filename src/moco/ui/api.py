@@ -39,6 +39,7 @@ from moco.cancellation import (
     clear_cancel_event,
     OperationCancelled
 )
+from moco.tools.mobile import get_pending_artifacts, clear_artifacts
 from moco.gateway.media_processor import MediaProcessor
 from moco.utils.tunnel import setup_tunnel, stop_tunnel
 from moco.adapters.line_adapter import LINEAdapter
@@ -182,6 +183,28 @@ class ApprovalManager:
         # 外部チャネル（LINE/Telegram）へプッシュ送信
         await self._push_external_notifications(approval_id, tool, args)
 
+    async def send_to_gateway(self, message: Dict[str, Any]) -> int:
+        """
+        Send a generic message to all connected gateway clients (WhatsApp, etc.).
+        
+        Args:
+            message: Dictionary containing the message payload
+            
+        Returns:
+            int: Number of clients that received the message
+        """
+        sent_count = 0
+        clients = list(self.gateway_clients.items())
+        for client_id, ws in clients:
+            try:
+                await ws.send_json(message)
+                sent_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to send to gateway client {client_id}: {e}")
+                self.gateway_clients.pop(client_id, None)
+        return sent_count
+
+
     async def _push_external_notifications(self, approval_id: str, tool: str, args: dict):
         """LINE/Telegramにプッシュ通知を送信"""
         text = f"承認リクエスト: {tool}\n引数: {json.dumps(args, ensure_ascii=False, indent=2)}"
@@ -268,7 +291,7 @@ class ApprovalManager:
 approval_manager = ApprovalManager()
 
 
-def get_orchestrator(profile: str, provider: str = "gemini", verbose: bool = False, working_directory: str = None) -> Orchestrator:
+def get_orchestrator(profile: str, provider: str = "openrouter", verbose: bool = False, working_directory: str = None) -> Orchestrator:
     """Orchestratorインスタンスを新規生成"""
     # 作業ディレクトリ: 引数 > 環境変数 > カレントディレクトリ
     work_dir = working_directory or os.getenv("MOCO_WORKING_DIRECTORY") or os.getcwd()
@@ -368,7 +391,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     profile: str = "development"
-    provider: str = "gemini"
+    provider: str = "openrouter"
     model: Optional[str] = None  # OpenRouter用モデル名
     verbose: bool = False
     working_directory: Optional[str] = None  # 作業ディレクトリ（セッションごとに設定可能）
@@ -1011,12 +1034,19 @@ async def chat(req: ChatRequest):
     # セッション準備
     session_id, history = orchestrator._prepare_session(message, session_id)
 
+    # アーティファクトをクリア（リクエスト開始時）
+    clear_artifacts()
+    
     # 非同期で実行（イベントループの競合を回避）
     response = await orchestrator.process_message(message, session_id, history)
+    
+    # 送信待ちのアーティファクトを取得
+    artifacts = get_pending_artifacts()
 
     return {
         "response": response,
-        "session_id": session_id
+        "session_id": session_id,
+        "artifacts": artifacts
     }
 
 

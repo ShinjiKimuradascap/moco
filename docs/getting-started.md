@@ -102,7 +102,7 @@ from moco.core import Orchestrator
 # オーケストレーターを作成
 orchestrator = Orchestrator(
     profile="default",      # プロファイル名
-    provider="gemini",      # LLM プロバイダ（省略時は環境変数）
+    provider="openrouter",      # LLM プロバイダ（省略時は環境変数）
     stream=True,            # ストリーミング出力
     verbose=False           # 詳細ログ
 )

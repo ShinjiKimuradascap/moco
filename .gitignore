@@ -103,3 +103,9 @@ test_workdir_manual.py
 
 # Test directory
 tests/
+
+# Local development
+test_env/
+vscode-extension/out/
+*.vsix
+vscode-extension/package-lock.json

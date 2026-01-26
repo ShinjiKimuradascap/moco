@@ -12,7 +12,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     profile: str = "development"
-    provider: str = "gemini"
+    provider: str = "openrouter"
     model: Optional[str] = None
     verbose: bool = False
     working_directory: Optional[str] = None

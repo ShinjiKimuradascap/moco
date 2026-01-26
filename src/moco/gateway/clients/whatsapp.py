@@ -99,7 +99,7 @@ def on_message(c: NewClient, ev: MessageEv):
     # Sender.User (自分の番号) と Chat.User (宛先の番号) が一致するか確認
     if info.MessageSource.Sender.User != info.MessageSource.Chat.User:
         return
-    
+
     # テキスト取得
     text = ""
     
@@ -361,6 +361,7 @@ def on_message(c: NewClient, ev: MessageEv):
                 data = response.json()
                 result = data.get("response", "（応答なし）")
                 new_session_id = data.get("session_id")
+                artifacts = data.get("artifacts", [])
                 
                 # セッションを保存
                 if new_session_id:
@@ -370,8 +371,35 @@ def on_message(c: NewClient, ev: MessageEv):
                 if len(result) > 4000:
                     result = result[:4000] + "\n\n... (長すぎるため省略)"
                 
+                import re
+                import os
+                
+                # アーティファクト（ツール経由で送信されたファイル）を処理
+                artifact_count = 0
+                for artifact in artifacts:
+                    a_path = artifact.get("path")
+                    a_type = artifact.get("type", "document")
+                    a_caption = artifact.get("caption", "")
+                    if a_path and os.path.exists(a_path):
+                        try:
+                            print(f"📦 アーティファクト送信中: {a_path} ({a_type})")
+                            sender_jid = info.MessageSource.Chat
+                            if a_type == "image":
+                                client.send_image(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
+                            elif a_type == "video":
+                                client.send_video(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
+                            elif a_type == "audio":
+                                client.send_audio(sender_jid, a_path)
+                            else:
+                                client.send_document(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
+                            artifact_count += 1
+                            print(f"📁 アーティファクト送信完了: {a_path}")
+                        except Exception as e:
+                            print(f"❌ アーティファクト送信失敗 ({a_path}): {e}")
+                
+                # テキスト返信
                 client.reply_message(result, ev)
-                print(f"📤 返信完了 ({len(result)} 文字)")
+                print(f"📤 返信完了 ({len(result)} 文字, アーティファクト {artifact_count}件)")
             else:
                 try:
                     error_detail = response.json().get("detail", str(response.status_code))

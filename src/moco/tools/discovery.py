@@ -116,6 +116,10 @@ def discover_tools(profile: str, additional_mcp: Optional[List[Any]] = None) -> 
         from .project_context import get_project_context
         tool_map["get_project_context"] = get_project_context
         
+        # mobile tools（モバイルクライアントへのファイル送信）
+        from .mobile import send_file_to_mobile
+        tool_map["send_file_to_mobile"] = send_file_to_mobile
+        
     # 3. MCP ツールを読み込む
     mcp_servers_config = profile_config.get("mcp_servers", []) if isinstance(profile_config, dict) else []
     
@@ -190,7 +194,7 @@ def _load_tools_from_dir(tools_dir: str) -> Dict[str, Callable]:
     dir_hash = abs(hash(tools_dir)) % 10000
     
     # 動的ロードから除外するファイル（グローバル状態を持つもの、または静的インポートされるもの）
-    exclude_files = {"discovery.py", "todo.py", "skill_tools.py", "skill_loader.py"}
+    exclude_files = {"discovery.py", "todo.py", "skill_tools.py", "skill_loader.py", "mobile.py"}
     
     # 相対インポートを動作させるため、親ディレクトリを sys.path に追加
     parent_dir = os.path.dirname(tools_dir)

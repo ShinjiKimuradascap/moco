@@ -312,7 +312,7 @@ class TestOrchestrator:
     @pytest.fixture
     def orchestrator(self):
         """テスト用の Orchestrator インスタンス。"""
-        return Orchestrator(provider="gemini")
+        return Orchestrator(provider="openrouter")
 
     def test_basic_message(self, orchestrator):
         """基本的なメッセージ処理のテスト。"""
