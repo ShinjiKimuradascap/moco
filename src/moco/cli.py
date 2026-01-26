@@ -996,8 +996,10 @@ def chat(
     # デフォルトのストリーム挙動:
     # - ZAI: ツール呼び出しがストリーミングで不安定なためデフォルトOFF
     # - その他: デフォルトON
+    # NOTE: LLMProvider is a simple constants class (strings), not Enum.
+    provider_name = getattr(provider_enum, "value", provider_enum)
     if stream is None:
-        stream = (provider_enum.value != "zai")
+        stream = (provider_name != "zai")
 
     with console.status(f"[bold cyan]Initializing Orchestrator ({profile})...[/]"):
         o = Orchestrator(
