@@ -291,7 +291,9 @@ class ApprovalManager:
 approval_manager = ApprovalManager()
 
 
-def get_orchestrator(profile: str, provider: str = "openrouter", verbose: bool = False, working_directory: str = None) -> Orchestrator:
+def get_orchestrator(profile: str, provider: str = None, verbose: bool = False, working_directory: str = None) -> Orchestrator:
+    # プロバイダー: 引数 > 環境変数 > デフォルト
+    provider = provider or os.getenv("LLM_PROVIDER", "openrouter")
     """Orchestratorインスタンスを新規生成"""
     # 作業ディレクトリ: 引数 > 環境変数 > カレントディレクトリ
     work_dir = working_directory or os.getenv("MOCO_WORKING_DIRECTORY") or os.getcwd()
@@ -387,11 +389,14 @@ class Attachment(BaseModel):
     mime_type: Optional[str] = None
 
 
+# デフォルトプロバイダー（環境変数から取得）
+_DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter")
+
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     profile: str = "development"
-    provider: str = "openrouter"
+    provider: str = _DEFAULT_PROVIDER
     model: Optional[str] = None  # OpenRouter用モデル名
     verbose: bool = False
     working_directory: Optional[str] = None  # 作業ディレクトリ（セッションごとに設定可能）
