@@ -362,6 +362,7 @@ def on_message(c: NewClient, ev: MessageEv):
                 result = data.get("response", "（応答なし）")
                 new_session_id = data.get("session_id")
                 artifacts = data.get("artifacts", [])
+                print(f"🔍 APIレスポンス artifacts: {len(artifacts)}件 - {artifacts}")
                 
                 # セッションを保存
                 if new_session_id:

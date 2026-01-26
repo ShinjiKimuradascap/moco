@@ -1042,6 +1042,7 @@ async def chat(req: ChatRequest):
     
     # 送信待ちのアーティファクトを取得
     artifacts = get_pending_artifacts()
+    print(f"🔧 [api.py] artifacts取得: {len(artifacts)}件 - {artifacts}")
 
     return {
         "response": response,
