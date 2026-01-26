@@ -1605,6 +1605,10 @@ class AgentRuntime:
                     # Check in extra fields (standard OpenAI python lib behavior for unknown fields)
                     elif hasattr(message, "model_extra") and message.model_extra and "reasoning_content" in message.model_extra:
                         content = message.model_extra["reasoning_content"]
+                
+                # Non-streaming mode: send content via progress_callback for UI display
+                if self.progress_callback and content:
+                    self.progress_callback(event_type="text", text=content)
                         
                 return content
 
