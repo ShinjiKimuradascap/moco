@@ -1218,9 +1218,9 @@ class AgentRuntime:
         # Z.ai doesn't support tool_stream in streaming mode for glm-4.7
         # Force non-streaming when using tools to ensure tool calls work correctly
         use_stream = self.stream
-        # USER REQUEST: Enable streaming for Zai
-        # if self.provider == LLMProvider.ZAI and tools:
-        #     use_stream = False
+        if self.provider == LLMProvider.ZAI:
+            # ZAI はストリーミング中の tool_calls が不安定なので常に非ストリーミング
+            use_stream = False
 
         # Commented out max_iterations: managed by token limit
         # iterations = 0
