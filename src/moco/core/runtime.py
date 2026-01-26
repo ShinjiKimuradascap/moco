@@ -1522,7 +1522,8 @@ class AgentRuntime:
                             "tools": tools,
                             "temperature": 0.7,
                         }
-                        if self.provider != LLMProvider.OPENROUTER:
+                        # parallel_tool_calls not supported by OpenRouter and ZAI
+                        if self.provider not in (LLMProvider.OPENROUTER, LLMProvider.ZAI):
                             create_kwargs["parallel_tool_calls"] = True
                         response = await self.openai_client.chat.completions.create(**create_kwargs)
                     # usage recording
@@ -1540,6 +1541,12 @@ class AgentRuntime:
             if not use_stream:
                 choice = response.choices[0]
                 message = choice.message
+                # Debug: Log ZAI response
+                if self.provider == LLMProvider.ZAI and self.verbose:
+                    print(f"[ZAI Debug] message.content: {message.content}")
+                    print(f"[ZAI Debug] message.tool_calls: {message.tool_calls}")
+                    if hasattr(message, "reasoning_content"):
+                        print(f"[ZAI Debug] reasoning_content: {message.reasoning_content}")
             else:
                 continue  # Already processed above for streaming
 
