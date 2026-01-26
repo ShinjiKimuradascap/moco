@@ -194,7 +194,7 @@ def _load_tools_from_dir(tools_dir: str) -> Dict[str, Callable]:
     dir_hash = abs(hash(tools_dir)) % 10000
     
     # 動的ロードから除外するファイル（グローバル状態を持つもの、または静的インポートされるもの）
-    exclude_files = {"discovery.py", "todo.py", "skill_tools.py", "skill_loader.py", "mobile.py"}
+    exclude_files = {"discovery.py", "todo.py", "skill_tools.py", "skill_loader.py", "mobile.py", "scheduler.py"}
     
     # 相対インポートを動作させるため、親ディレクトリを sys.path に追加
     parent_dir = os.path.dirname(tools_dir)
