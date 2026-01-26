@@ -45,6 +45,7 @@ def get_user_settings(sender: str) -> dict:
             "session_id": None,
             "profile": DEFAULT_PROFILE,
             "provider": DEFAULT_PROVIDER,
+            "model": None,  # None = プロバイダのデフォルトモデルを使用
             "working_dir": DEFAULT_WORKING_DIR,
             "lock": threading.Lock(),
             "active_request_id": None  # リクエストID管理（キャンセル時の復旧用）
@@ -146,11 +147,21 @@ def on_message(c: NewClient, ev: MessageEv):
                 print(f"📤 プロバイダ変更: {new_provider}")
             return
         
+        if text_lower.startswith("/model "):
+            new_model = text[7:].strip()
+            if new_model:
+                settings["model"] = new_model
+                client.reply_message(f"✅ モデルを変更: {new_model}", ev)
+                print(f"📤 モデル変更: {new_model}")
+            return
+        
         if text_lower == "/status":
+            model_display = settings.get('model') or '(デフォルト)'
             status = f"""📊 現在の設定
 
 プロファイル: {settings['profile']}
 プロバイダ: {settings['provider']}
+モデル: {model_display}
 作業ディレクトリ: {settings['working_dir']}
 セッション: {settings['session_id'] or '(新規)'}"""
             client.reply_message(status, ev)
@@ -227,6 +238,7 @@ def on_message(c: NewClient, ev: MessageEv):
 
 /profile <名前> - プロファイル変更
 /provider <名前> - プロバイダ変更
+/model <名前> - モデル変更
 /workdir <パス> - 作業ディレクトリ変更 (短縮形: /cd)
 /new または /clear - 新しいセッション
 /stop - 実行中のタスクを中断
@@ -234,10 +246,10 @@ def on_message(c: NewClient, ev: MessageEv):
 /help - このヘルプを表示
 
 例:
-/workdir ./data
-/profile development
 /provider openrouter
-/stop"""
+/model x-ai/grok-code-fast-1
+/profile development
+/workdir ./data"""
             client.reply_message(help_text, ev)
             return
     
@@ -343,6 +355,10 @@ def on_message(c: NewClient, ev: MessageEv):
                 "provider": settings["provider"],
                 "working_directory": settings["working_dir"]
             }
+            
+            # モデルが指定されていれば追加
+            if settings.get("model"):
+                payload["model"] = settings["model"]
             
             # 添付ファイルがあれば追加
             if current_attachments:
@@ -451,6 +467,7 @@ def main():
 ║    /workdir <パス>  - 作業ディレクトリ変更 (短縮: /cd)         ║
 ║    /profile <名前>  - プロファイル変更                         ║
 ║    /provider <名前> - プロバイダ変更                           ║
+║    /model <名前>    - モデル変更                               ║
 ║    /stop            - 実行を中断                               ║
 ║    /new             - 新しいセッション                         ║
 ║    /status          - 現在の設定を表示                         ║
