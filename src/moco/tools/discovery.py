@@ -116,10 +116,6 @@ def discover_tools(profile: str, additional_mcp: Optional[List[Any]] = None) -> 
         from .project_context import get_project_context
         tool_map["get_project_context"] = get_project_context
         
-        # mobile tools（モバイルクライアントへのファイル送信）
-        from .mobile import send_file_to_mobile
-        tool_map["send_file_to_mobile"] = send_file_to_mobile
-        
     # 3. MCP ツールを読み込む
     mcp_servers_config = profile_config.get("mcp_servers", []) if isinstance(profile_config, dict) else []
     

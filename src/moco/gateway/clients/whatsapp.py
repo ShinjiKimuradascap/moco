@@ -99,6 +99,9 @@ def on_message(c: NewClient, ev: MessageEv):
     # Sender.User (自分の番号) と Chat.User (宛先の番号) が一致するか確認
     if info.MessageSource.Sender.User != info.MessageSource.Chat.User:
         return
+    
+    global last_active_jid
+    last_active_jid = info.MessageSource.Chat
 
     # テキスト取得
     text = ""
@@ -361,7 +364,6 @@ def on_message(c: NewClient, ev: MessageEv):
                 data = response.json()
                 result = data.get("response", "（応答なし）")
                 new_session_id = data.get("session_id")
-                artifacts = data.get("artifacts", [])
                 
                 # セッションを保存
                 if new_session_id:
@@ -371,35 +373,51 @@ def on_message(c: NewClient, ev: MessageEv):
                 if len(result) > 4000:
                     result = result[:4000] + "\n\n... (長すぎるため省略)"
                 
+                # 画像送信処理 ([IMAGE: path] を検出)
                 import re
                 import os
                 
-                # アーティファクト（ツール経由で送信されたファイル）を処理
-                artifact_count = 0
-                for artifact in artifacts:
-                    a_path = artifact.get("path")
-                    a_type = artifact.get("type", "document")
-                    a_caption = artifact.get("caption", "")
-                    if a_path and os.path.exists(a_path):
+                # 正規表現で画像を検索
+                image_matches = list(re.finditer(r'\[IMAGE:\s*(.*?)\]', result))
+                for match in image_matches:
+                    image_path_raw = match.group(1).strip()
+                    
+                    # パス解決
+                    if not os.path.isabs(image_path_raw):
+                        # 作業ディレクトリ基準
+                        work_dir = settings.get("working_dir") or DEFAULT_WORKING_DIR
+                        image_path = os.path.join(work_dir, image_path_raw)
+                    else:
+                        image_path = image_path_raw
+                    
+                    if os.path.exists(image_path):
                         try:
-                            print(f"📦 アーティファクト送信中: {a_path} ({a_type})")
-                            sender_jid = info.MessageSource.Chat
-                            if a_type == "image":
-                                client.send_image(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
-                            elif a_type == "video":
-                                client.send_video(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
-                            elif a_type == "audio":
-                                client.send_audio(sender_jid, a_path)
-                            else:
-                                client.send_document(sender_jid, a_path, caption=a_caption or os.path.basename(a_path))
-                            artifact_count += 1
-                            print(f"📁 アーティファクト送信完了: {a_path}")
+                            print(f"📤 画像を送信中: {image_path}")
+                            # neonize: send_image(jid, file_path, caption=..., quoted=...)
+                            client.send_image(
+                                info.MessageSource.Chat,
+                                image_path,
+                                caption=f"🖼️ {os.path.basename(image_path)}",
+                                quoted=msg  # 元のメッセージに返信
+                            )
+                        except AttributeError:
+                             # 古いバージョンの場合やメソッド名が違う場合のフォールバック
+                             try:
+                                 # upload してから send_message するパターンなど
+                                 # とりあえずエラー表示
+                                 print("⚠️ send_image method not found on client")
+                             except Exception:
+                                 pass
                         except Exception as e:
-                            print(f"❌ アーティファクト送信失敗 ({a_path}): {e}")
-                
+                            print(f"⚠️ 画像送信エラー: {e}")
+                            client.reply_message(f"⚠️ 画像送信に失敗しました: {e}", ev)
+                    else:
+                         print(f"⚠️ 画像ファイルが見つかりません: {image_path}")
+                         client.reply_message(f"⚠️ 画像が見つかりません: {image_path}", ev)
+
                 # テキスト返信
                 client.reply_message(result, ev)
-                print(f"📤 返信完了 ({len(result)} 文字, アーティファクト {artifact_count}件)")
+                print(f"📤 返信完了 ({len(result)} 文字 + 画像 {len(image_matches)} 枚)")
             else:
                 try:
                     error_detail = response.json().get("detail", str(response.status_code))
@@ -445,6 +463,75 @@ def main():
     """)
     
     try:
+        # 直近のアクティブなチャット相手（ツールからの能動送信に使用）
+        global last_active_jid
+        last_active_jid = None
+
+        def websocket_listener():
+            """WebSocketでmoco serverからのプッシュ通知（ツール実行指示など）を待機"""
+            try:
+                import asyncio
+                import websockets
+                import json
+                import os
+            except ImportError:
+                print("⚠️ websockets がインストールされていません。ツール連携機能は無効になります。")
+                print("💡 pip install websockets を実行してください。")
+                return
+
+            uri = "ws://localhost:8000/ws/gateway"
+            
+            async def listen():
+                while True:
+                    try:
+                        print("🔌 Connecting to Gateway WebSocket...")
+                        async with websockets.connect(uri) as websocket:
+                            print("✅ Gateway WebSocket connected")
+                            
+                            while True:
+                                msg = await websocket.recv()
+                                try:
+                                    data = json.loads(msg)
+                                    msg_type = data.get("type")
+                                    
+                                    if msg_type == "send_image":
+                                        payload = data.get("payload", {})
+                                        path = payload.get("path")
+                                        caption = payload.get("caption", "")
+                                        
+                                        target_jid = last_active_jid
+                                        # send_image_to_whatsapp ツールからの呼び出し
+                                        if path and os.path.exists(path) and target_jid:
+                                            print(f"📥 WebSocket: Sending image {path} to {target_jid}")
+                                            try:
+                                                # send_image は JID を第一引数にとる
+                                                client.send_image(
+                                                    target_jid,
+                                                    path,
+                                                    caption=caption or f"🖼️ {os.path.basename(path)}"
+                                                )
+                                                print(f"✅ 画像送信成功: {path}")
+                                            except Exception as e:
+                                                print(f"⚠️ 画像送信エラー: {e}")
+                                        elif not target_jid:
+                                            print(f"⚠️ 送信先不明（まだメッセージを受信していません）: {path}")
+                                        elif not os.path.exists(path):
+                                            print(f"⚠️ ファイル不明: {path}")
+
+                                except json.JSONDecodeError:
+                                    pass
+                                except Exception as e:
+                                    print(f"Error processing WebSocket message: {e}")
+                                    
+                    except (websockets.exceptions.ConnectionClosed, OSError):
+                        print("⚠️ Gateway WebSocket disconnected. Reconnecting in 5s...")
+                        await asyncio.sleep(5)
+                    except Exception as e:
+                        print(f"WebSocket listener error: {e}")
+                        await asyncio.sleep(5)
+
+            asyncio.run(listen())
+
         print("🚀 WhatsApp 接続開始...")
         print("   初回はQRコードが表示されます。スマホでスキャンしてください。")
         print()

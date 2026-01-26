@@ -39,7 +39,6 @@ from moco.cancellation import (
     clear_cancel_event,
     OperationCancelled
 )
-from moco.tools.mobile import get_pending_artifacts, clear_artifacts
 from moco.gateway.media_processor import MediaProcessor
 from moco.utils.tunnel import setup_tunnel, stop_tunnel
 from moco.adapters.line_adapter import LINEAdapter
@@ -291,9 +290,7 @@ class ApprovalManager:
 approval_manager = ApprovalManager()
 
 
-def get_orchestrator(profile: str, provider: str = None, verbose: bool = False, working_directory: str = None) -> Orchestrator:
-    # プロバイダー: 引数 > 環境変数 > デフォルト
-    provider = provider or os.getenv("LLM_PROVIDER", "openrouter")
+def get_orchestrator(profile: str, provider: str = "openrouter", verbose: bool = False, working_directory: str = None) -> Orchestrator:
     """Orchestratorインスタンスを新規生成"""
     # 作業ディレクトリ: 引数 > 環境変数 > カレントディレクトリ
     work_dir = working_directory or os.getenv("MOCO_WORKING_DIRECTORY") or os.getcwd()
@@ -389,14 +386,11 @@ class Attachment(BaseModel):
     mime_type: Optional[str] = None
 
 
-# デフォルトプロバイダー（環境変数から取得）
-_DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter")
-
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     profile: str = "development"
-    provider: str = _DEFAULT_PROVIDER
+    provider: str = "openrouter"
     model: Optional[str] = None  # OpenRouter用モデル名
     verbose: bool = False
     working_directory: Optional[str] = None  # 作業ディレクトリ（セッションごとに設定可能）
@@ -1039,19 +1033,12 @@ async def chat(req: ChatRequest):
     # セッション準備
     session_id, history = orchestrator._prepare_session(message, session_id)
 
-    # アーティファクトをクリア（リクエスト開始時）
-    clear_artifacts()
-    
     # 非同期で実行（イベントループの競合を回避）
     response = await orchestrator.process_message(message, session_id, history)
-    
-    # 送信待ちのアーティファクトを取得
-    artifacts = get_pending_artifacts()
 
     return {
         "response": response,
-        "session_id": session_id,
-        "artifacts": artifacts
+        "session_id": session_id
     }
 
 
