@@ -1367,7 +1367,7 @@ class Orchestrator:
                     base_url="https://openrouter.ai/api/v1"
                 )
                 response = client.chat.completions.create(
-                    model=os.environ.get("OPENROUTER_MODEL", "xiaomi/mimo-v2-flash"),
+                    model=os.environ.get("OPENROUTER_MODEL", "moonshotai/kimi-k2.5"),
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=max_tokens,
                     temperature=temperature
