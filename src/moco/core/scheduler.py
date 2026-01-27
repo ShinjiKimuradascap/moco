@@ -1,12 +1,17 @@
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
+import httpx
+
 from ..storage.scheduled_task_store import ScheduledTaskStore
-from .orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
+
+# moco ui のAPI URL
+MOCO_API_URL = os.environ.get("MOCO_API_URL", "http://localhost:8000/api/chat")
 
 class MocoScheduler:
     """
@@ -84,17 +89,30 @@ class MocoScheduler:
             logger.info(f"Executing task {task_id}: {description} (profile: {profile})")
             
             try:
-                # Orchestratorの準備
-                if callable(self.orchestrator_factory):
-                    orchestrator = self.orchestrator_factory(profile=profile)
-                else:
-                    orchestrator = self.orchestrator_factory
-                
-                # タスクの実行
+                # moco ui の /api/chat にリクエストを投げる（WhatsAppと同じフロー）
                 session_id = f"scheduled_{task_id}_{datetime.now().strftime('%Y%m%d%H%M')}"
+                working_dir = task.get('working_dir') or os.getcwd()
                 
-                result = await orchestrator.run(description, session_id=session_id)
-                logger.debug(f"Task {task_id} result: {result[:100]}...")
+                payload = {
+                    "message": description,
+                    "session_id": session_id,
+                    "profile": profile,
+                    "working_directory": working_dir
+                }
+                
+                async with httpx.AsyncClient(timeout=None) as client:
+                    response = await client.post(MOCO_API_URL, json=payload)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    result = data.get("response", "")
+                    artifacts = data.get("artifacts", [])
+                    logger.debug(f"Task {task_id} result: {result[:100] if result else '(empty)'}...")
+                    if artifacts:
+                        logger.info(f"Task {task_id} generated {len(artifacts)} artifacts")
+                else:
+                    result = f"Error: {response.status_code}"
+                    logger.error(f"Task {task_id} failed: {response.text[:200]}")
                 
                 # 完了通知と次回予定の更新
                 self.store.complete_task(task_id)
@@ -115,23 +133,34 @@ class MocoScheduler:
                 self.store.complete_task(task_id)
 
 if __name__ == "__main__":
-    # 簡単な動作確認用のモック
-    logging.basicConfig(level=logging.INFO)
+    # スケジューラを永続的に実行（moco ui の API 経由）
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
     async def main():
-        from .orchestrator import Orchestrator
+        scheduler = MocoScheduler(
+            orchestrator_factory=None,  # API経由なので不要
+            interval_seconds=60  # 1分ごとにチェック
+        )
         
-        def factory(profile="default"):
-            return Orchestrator(profile=profile)
-            
-        scheduler = MocoScheduler(factory, interval_seconds=10)
-        
-        # テストタスクの追加
-        store = ScheduledTaskStore()
-        store.add_task("test_ping", "現在時刻を教えて", "*/1 * * * *") # 毎分
+        logger.info("Starting Moco Scheduler (API mode)...")
+        logger.info(f"API URL: {MOCO_API_URL}")
         
         await scheduler.start()
-        await asyncio.sleep(65) # 1サイクル待機
-        await scheduler.stop()
+        
+        # 永続的に実行（Ctrl+C で停止）
+        try:
+            while True:
+                await asyncio.sleep(3600)  # 1時間ごとにログ出力
+                logger.info("Scheduler is running...")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await scheduler.stop()
 
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Scheduler stopped by user.")

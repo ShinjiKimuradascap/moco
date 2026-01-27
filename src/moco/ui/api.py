@@ -39,12 +39,14 @@ from moco.cancellation import (
     clear_cancel_event,
     OperationCancelled
 )
-from moco.tools.mobile import get_pending_artifacts, clear_artifacts
+from moco.tools.mobile import get_pending_artifacts, clear_artifacts, NotifyMobileTool
 from moco.gateway.media_processor import MediaProcessor
 from moco.utils.tunnel import setup_tunnel, stop_tunnel
 from moco.adapters.line_adapter import LINEAdapter
 from moco.adapters.telegram_adapter import TelegramAdapter
 from moco.adapters.base import OutgoingMessage, ChannelAdapter
+from moco.core.scheduler import MocoScheduler
+from datetime import datetime
 
 
 def filter_response_for_display(response: str, verbose: bool = False) -> str:
@@ -73,6 +75,9 @@ def filter_response_for_display(response: str, verbose: bool = False) -> str:
 
 app = FastAPI(title="Moco", version="1.0.0")
 
+# グローバルスケジューラー
+_scheduler = None
+
 @app.on_event("startup")
 async def startup_event():
     """起動時にトンネルをセットアップ"""
@@ -82,10 +87,61 @@ async def startup_event():
         setup_tunnel(port)
     except Exception as e:
         logger.error(f"Error during tunnel setup: {e}")
+    
+    # スケジューラーを起動
+    global _scheduler
+    try:
+        # Orchestrator factory
+        def orchestrator_factory(profile="default"):
+            return Orchestrator(profile=profile)
+        
+        # 通知ツール
+        notify_tool = NotifyMobileTool()
+        
+        async def scheduler_callback(task, result):
+            """タスク完了時のコールバック"""
+            try:
+                notification = f"""
+📅 スケジュールタスク完了
+
+タスク: {task.get('description', '')}
+ID: {task.get('id')}
+実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+結果:
+{result[:1000]}
+                """.strip()
+                await notify_tool.execute(notification)
+                logger.info(f"Notification sent for task {task.get('id')}")
+            except Exception as e:
+                logger.error(f"Failed to send notification: {e}", exc_info=True)
+        
+        # スケジューラーの作成と起動
+        db_path = os.path.join(os.getcwd(), "tasks.db")
+        _scheduler = MocoScheduler(
+            orchestrator_factory=orchestrator_factory,
+            interval_seconds=60,
+            db_path=db_path,
+            after_execute_callback=scheduler_callback
+        )
+        await _scheduler.start()
+        logger.info("Moco Scheduler started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}", exc_info=True)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """終了時にトンネルを停止"""
+    global _scheduler
+    # スケジューラーを停止
+    if _scheduler:
+        try:
+            await _scheduler.stop()
+            logger.info("Moco Scheduler stopped")
+        except Exception as e:
+            logger.error(f"Error during scheduler shutdown: {e}")
+    
+    # トンネルを停止
     try:
         stop_tunnel()
     except Exception as e:
