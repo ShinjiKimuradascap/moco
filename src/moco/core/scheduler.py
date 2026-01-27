@@ -90,7 +90,8 @@ class MocoScheduler:
             
             try:
                 # moco ui の /api/chat にリクエストを投げる（WhatsAppと同じフロー）
-                session_id = f"scheduled_{task_id}_{datetime.now().strftime('%Y%m%d%H%M')}"
+                # セッション名はタスクIDをそのまま使う（daily-news, slack-summary 等）
+                session_id = f"--{task_id}"
                 working_dir = task.get('working_dir') or os.getcwd()
                 
                 payload = {
