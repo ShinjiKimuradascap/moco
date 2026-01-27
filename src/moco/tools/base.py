@@ -241,12 +241,18 @@ def edit_file(path: str, old_string: str, new_string: str, dry_run: bool = False
 
     Args:
         path (str): 編集するファイルのパス
-        old_string (str): 置換対象の文字列
+        old_string (str): 置換対象の文字列（短くユニークな部分を指定）
         new_string (str): 置換後の文字列
         dry_run (bool, optional): Trueの場合、実際に書き込まずに差分を表示します。
 
     Returns:
         str: 実行結果メッセージまたは差分
+
+    ベストプラクティス（重要）:
+        - old_string は短くユニークな部分だけを指定する（5-10行程度が理想）
+        - 巨大な old_string は一致しにくい（エスケープ文字や空白の違いで失敗する）
+        - JSONファイルの場合、変更したいキーの前後数行だけを指定する
+        - 失敗した場合は read_file で実際の内容を確認し、より短い old_string で再試行する
     """
     try:
         abs_path = resolve_safe_path(path)
@@ -320,16 +326,50 @@ def edit_file(path: str, old_string: str, new_string: str, dry_run: bool = False
 
             if len(match_indices) == 0:
                 msg = f"Error: old_string not found in {path}\n"
-                # ヒントの生成を強化
-                diff = list(difflib.ndiff(old_unix.splitlines(), content_unix.splitlines()))
-                nearby = [ln[2:] for ln in diff if ln.startswith('  ') and len(ln.strip()) > 10]
-                if nearby:
-                    msg += f"Hint: Similar code found:\n{nearby[0][:100]}...\n"
-
+                
+                # 部分一致を探す（最初の非空行で検索）
+                first_old_line = next((l.strip() for l in old_lines if l.strip()), "")
+                if first_old_line and len(first_old_line) > 10:
+                    partial_matches = []
+                    for i, line in enumerate(content_lines):
+                        # 最初の20文字で部分一致を探す
+                        if first_old_line[:20] in line or line.strip()[:20] in first_old_line:
+                            partial_matches.append((i + 1, line.rstrip()[:80]))
+                    
+                    if partial_matches:
+                        msg += f"\n📍 Partial matches found (line numbers where similar content exists):\n"
+                        for line_num, preview in partial_matches[:3]:
+                            msg += f"  Line {line_num}: {preview}...\n"
+                        msg += "\nTip: Use read_file to check exact content around these lines.\n"
+                
                 # インデントの差異をチェック
-                if any(normalize(ol) in [normalize(cl) for cl in content_lines] for ol in old_lines if ol.strip()):
-                    msg += "Hint: Content matches partially but indentation or structure differs.\n"
-
+                normalized_old = set(normalize(ol) for ol in old_lines if ol.strip())
+                normalized_content = {normalize(cl): cl for cl in content_lines if cl.strip()}
+                
+                matching_normalized = normalized_old & set(normalized_content.keys())
+                if matching_normalized:
+                    msg += f"\n⚠️ Content matches but formatting differs.\n"
+                    sample = list(matching_normalized)[0]
+                    actual_line = normalized_content[sample]
+                    msg += f"Expected (normalized): {sample[:60]}...\n"
+                    msg += f"Actual in file: {actual_line.rstrip()[:60]}...\n"
+                    msg += "Tip: Check whitespace, indentation, or escape sequences.\n"
+                
+                # JSON ファイルの場合は構造を表示
+                if path.endswith('.json'):
+                    msg += f"\n📋 For JSON files, consider reading the file first to get exact content.\n"
+                    # 最初の10行を表示
+                    msg += f"File preview (first 10 lines):\n"
+                    for i, line in enumerate(content_lines[:10]):
+                        msg += f"  {i+1}: {line.rstrip()[:70]}\n"
+                
+                # old_string が長すぎる場合のガイダンス
+                old_line_count = len([l for l in old_lines if l.strip()])
+                if old_line_count > 10:
+                    msg += f"\n🔧 old_string が長すぎます（{old_line_count}行）。\n"
+                    msg += "   → 変更したい部分の前後5行程度に絞って再試行してください。\n"
+                    msg += "   → 特にJSONファイルでは、変更するキーの周辺だけを指定してください。\n"
+                
                 return msg
 
             if len(match_indices) > 1:

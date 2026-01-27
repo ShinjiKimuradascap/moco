@@ -650,7 +650,6 @@ class AgentRuntime:
     ):
         self.config = config
         self.tool_map = tool_map
-        self.system_prompt_override = system_prompt_override
         self.agent_name = agent_name
         self.name = name or agent_name
         self.verbose = verbose
@@ -658,7 +657,7 @@ class AgentRuntime:
         self.parent_agent = parent_agent
         self.skills: List[SkillConfig] = skills or []
         self.memory_service = memory_service
-        self.parent_session_id = None
+        self.system_prompt_override = system_prompt_override
         
         # Memory context (dynamically updated in run())
         self._memory_context = ""
@@ -727,7 +726,7 @@ class AgentRuntime:
                 raise ValueError("ZAI_API_KEY environment variable not set")
             self.openai_client = AsyncOpenAI(
                 api_key=zai_key,
-                base_url=os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
+                base_url="https://api.z.ai/api/coding/paas/v4"
             )
             self.client = None
         else:
@@ -866,7 +865,7 @@ class AgentRuntime:
         
         context_header += "---\n\n"
 
-        prompt = self.system_prompt_override if hasattr(self, 'system_prompt_override') and self.system_prompt_override else self.config.system_prompt
+        prompt = self.system_prompt_override or self.config.system_prompt
 
         # Injection of Skills
         if self.skills:
@@ -932,8 +931,6 @@ class AgentRuntime:
         # Cancellation check
         if session_id:
             check_cancelled(session_id)
-            if self.parent_session_id:
-                check_cancelled(self.parent_session_id)
 
         # Validate required args before logging/loop-detection (Cursor-like behavior)
         # - Avoid noisy "📝 write_file" lines when the model emits empty args
@@ -1017,13 +1014,6 @@ class AgentRuntime:
         elif func_name in self.available_tools:
             try:
                 raw_result = await _execute_tool_safely_async(self.available_tools[func_name], args_dict)
-                
-                # Check cancellation again after potentially long execution
-                if session_id:
-                    check_cancelled(session_id)
-                    if self.parent_session_id:
-                        check_cancelled(self.parent_session_id)
-                
                 result = _truncate_tool_output(raw_result, func_name)
             except Exception as e:
                 result = f"Error executing {func_name}: {e}"
@@ -1094,8 +1084,6 @@ class AgentRuntime:
         # Cancellation check
         if session_id:
             check_cancelled(session_id)
-            if self.parent_session_id:
-                check_cancelled(self.parent_session_id)
 
         # Recall from semantic memory
         self._recall_results = []
@@ -1218,8 +1206,7 @@ class AgentRuntime:
         # Z.ai doesn't support tool_stream in streaming mode for glm-4.7
         # Force non-streaming when using tools to ensure tool calls work correctly
         use_stream = self.stream
-        if self.provider == LLMProvider.ZAI:
-            # ZAI はストリーミング中の tool_calls が不安定なので常に非ストリーミング
+        if self.provider == LLMProvider.ZAI and tools:
             use_stream = False
 
         # Commented out max_iterations: managed by token limit
@@ -1228,8 +1215,6 @@ class AgentRuntime:
         while True:
             if session_id:
                 check_cancelled(session_id)
-                if self.parent_session_id:
-                    check_cancelled(self.parent_session_id)
             
             # Iteration warnings commented out (managed by token limit)
             # remaining = max_iterations - iterations
@@ -1246,8 +1231,9 @@ class AgentRuntime:
                         # Use reasoning parameter for OpenRouter
                         # effort and max_tokens cannot be specified simultaneously
                         if self.provider == LLMProvider.OPENROUTER:
+                            reasoning_max_tokens = os.environ.get("MOCO_REASONING_MAX_TOKENS", "1000")
                             extra_body["reasoning"] = {
-                                "effort": "high"  # low, medium, high, xhigh
+                                "max_tokens": int(reasoning_max_tokens)
                             }
                         
                         create_kwargs = {
@@ -1257,9 +1243,8 @@ class AgentRuntime:
                             "stream": True,
                             "stream_options": {"include_usage": True},
                         }
-                        # Set parallel_tool_calls only for non-OpenRouter providers
-                        if self.provider != LLMProvider.OPENROUTER:
-                            create_kwargs["parallel_tool_calls"] = True
+                        # Enable parallel_tool_calls (OpenRouter models like kimi-k2.5 support this)
+                        create_kwargs["parallel_tool_calls"] = True
                         
                         # Use reasoning_effort for OpenAI o1/o3
                         if self.provider != LLMProvider.OPENROUTER:
@@ -1270,7 +1255,6 @@ class AgentRuntime:
                         
                         response = await self.openai_client.chat.completions.create(**create_kwargs)
                     else:
-                        # parallel_tool_calls might not be supported on OpenRouter/Bedrock
                         create_kwargs = {
                             "model": self.model_name,
                             "messages": messages,
@@ -1278,30 +1262,32 @@ class AgentRuntime:
                             "temperature": 0.7,
                             "stream": True,
                             "stream_options": {"include_usage": True},
+                            "parallel_tool_calls": True,
                         }
-                        # Set parallel_tool_calls only for non-OpenRouter providers
-                        if self.provider != LLMProvider.OPENROUTER:
-                            create_kwargs["parallel_tool_calls"] = True
                         response = await self.openai_client.chat.completions.create(**create_kwargs)
 
                     # Process streaming response
                     collected_content = ""
-                    full_reasoning_content = "" # Buffer for fallback
                     # Accumulate OpenAI tool call deltas by index (ai_manager style)
                     # idx -> {"id": str, "name": str, "arguments": str}
                     tool_calls_dict: Dict[int, Dict[str, str]] = {}
                     # Buffering thinking text (mitigation for fine chunks in GLM, etc.)
-                    reasoning_buffer = ""
+                    reasoning_buffer = ""  # For display purposes
+                    collected_reasoning = ""  # Always capture for models like kimi-k2.5
                     reasoning_header_shown = False
 
                     async for chunk in response:
                         # Get usage information (included in the last chunk)
                         if hasattr(chunk, "usage") and chunk.usage:
-                            self.last_usage = {
-                                "prompt_tokens": int(chunk.usage.prompt_tokens or 0),
-                                "completion_tokens": int(chunk.usage.completion_tokens or 0),
-                                "total_tokens": int(chunk.usage.total_tokens or 0)
-                            }
+                            try:
+                                self.last_usage = {
+                                    "prompt_tokens": int(chunk.usage.prompt_tokens or 0),
+                                    "completion_tokens": int(chunk.usage.completion_tokens or 0),
+                                    "total_tokens": int(chunk.usage.total_tokens or 0)
+                                }
+                            except (ValueError, TypeError):
+                                # Some models may return non-numeric usage data
+                                pass
 
                         delta = chunk.choices[0].delta if chunk.choices else None
                         if not delta:
@@ -1333,7 +1319,9 @@ class AgentRuntime:
                             reasoning_text = delta.reasoning_content
                         
                         if reasoning_text:
-                            full_reasoning_content += reasoning_text 
+                            # Always capture reasoning for models like kimi-k2.5 that require it
+                            collected_reasoning += reasoning_text
+                            
                             if self.progress_callback:
                                 # Via Web UI: Send batched via progress_callback
                                 self.progress_callback(
@@ -1341,41 +1329,31 @@ class AgentRuntime:
                                     content=reasoning_text,
                                     agent_name=self.name
                                 )
-                            else:
+                            elif self.verbose:
                                 # CLI direct execution: Show thinking process only in verbose mode
-                                if self.verbose and not self.progress_callback:
-                                    # Buffer and flush at periods, newlines, or a certain number of characters
-                                    reasoning_buffer += reasoning_text
-                                    # Show header only once
-                                    if not reasoning_header_shown:
-                                        _safe_stream_print("\n💭 [Thinking...]\n")
-                                        reasoning_header_shown = True
-                                    # Flush conditions: period, newline, or 80+ characters
-                                    while len(reasoning_buffer) >= 80 or any(c in reasoning_buffer for c in '.\n'):
-                                        # If there is a period or newline, output until there
-                                        flush_pos = -1
-                                        for i, c in enumerate(reasoning_buffer):
-                                            if c in '.\n':
-                                                flush_pos = i + 1
-                                                break
-                                        if flush_pos == -1 and len(reasoning_buffer) >= 80:
-                                            flush_pos = 80
-                                        if flush_pos > 0:
-                                            _safe_stream_print(reasoning_buffer[:flush_pos])
-                                            reasoning_buffer = reasoning_buffer[flush_pos:]
-                                        else:
+                                # Buffer and flush at periods, newlines, or a certain number of characters
+                                reasoning_buffer += reasoning_text
+                                # Show header only once
+                                if not reasoning_header_shown:
+                                    _safe_stream_print("\n💭 [Thinking...]\n")
+                                    reasoning_header_shown = True
+                                # Flush conditions: period, newline, or 80+ characters
+                                while len(reasoning_buffer) >= 80 or any(c in reasoning_buffer for c in '.\n'):
+                                    # If there is a period or newline, output until there
+                                    flush_pos = -1
+                                    for i, c in enumerate(reasoning_buffer):
+                                        if c in '.\n':
+                                            flush_pos = i + 1
                                             break
-                                else:
-                                    # Do not use thinking buffer if not in verbose mode
-                                    reasoning_buffer = ""
+                                    if flush_pos == -1 and len(reasoning_buffer) >= 80:
+                                        flush_pos = 80
+                                    if flush_pos > 0:
+                                        _safe_stream_print(reasoning_buffer[:flush_pos])
+                                        reasoning_buffer = reasoning_buffer[flush_pos:]
+                                    else:
+                                        break
                         # Stream output text content
                         if delta.content:
-                            # Check cancellation during streaming
-                            if session_id:
-                                check_cancelled(session_id)
-                                if self.parent_session_id:
-                                    check_cancelled(self.parent_session_id)
-                            
                             if not self.progress_callback:
                                 _safe_stream_print(delta.content)
                             collected_content += delta.content
@@ -1434,11 +1412,15 @@ class AgentRuntime:
                                 }
                             })
 
-                        messages.append({
+                        assistant_msg = {
                             "role": "assistant",
                             "content": collected_content or "",
                             "tool_calls": tool_calls_list
-                        })
+                        }
+                        # Include reasoning_content for models like kimi-k2.5 that require it
+                        if collected_reasoning:
+                            assistant_msg["reasoning_content"] = collected_reasoning
+                        messages.append(assistant_msg)
 
                         for tc in tool_calls_list:
                             func_name = tc["function"]["name"]
@@ -1454,12 +1436,6 @@ class AgentRuntime:
                             elif not (stripped.startswith("{") and stripped.endswith("}")):
                                 result = "Error: tool call arguments are incomplete JSON"
                             else:
-                                # ツール実行直前
-                                if session_id:
-                                    check_cancelled(session_id)
-                                    if self.parent_session_id:
-                                        check_cancelled(self.parent_session_id)
-                                
                                 # Do not execute tools until arguments are fully parseable JSON.
                                 # NOTE: Using default={} hides JSON parse failures and causes missing-required loops.
                                 args_dict = SmartJSONParser.parse(raw_args, default=None)
@@ -1467,12 +1443,6 @@ class AgentRuntime:
                                     result = "Error: tool call arguments are invalid JSON (expected a single JSON object)"
                                 else:
                                     result = await self._execute_tool_with_tracking(func_name, args_dict, session_id)
-                                
-                                # ツール実行直後
-                                if session_id:
-                                    check_cancelled(session_id)
-                                    if self.parent_session_id:
-                                        check_cancelled(self.parent_session_id)
 
                             messages.append({
                                 "role": "tool",
@@ -1496,12 +1466,8 @@ class AgentRuntime:
                         continue  # Next iteration
                     else:
                         # If empty, return partial response
-                        if not collected_content:
-                             if self._partial_response:
-                                 return self._partial_response
-                             # Fallback to reasoning content (Z.ai / GLM-4.7)
-                             if full_reasoning_content:
-                                 return full_reasoning_content
+                        if not collected_content and self._partial_response:
+                            return self._partial_response
                         return collected_content
                 else:
                     # Non-streaming mode
@@ -1514,46 +1480,28 @@ class AgentRuntime:
                         }
                         if self.provider != LLMProvider.OPENROUTER:
                             create_kwargs["reasoning_effort"] = "medium"
-                            create_kwargs["parallel_tool_calls"] = True
-                        # ZAI: force tool calling when tools are available (otherwise it may only "suggest" tools in text)
-                        if self.provider == LLMProvider.ZAI and tools:
-                            create_kwargs["tool_choice"] = "required"
-                        try:
-                            response = await self.openai_client.chat.completions.create(**create_kwargs)
-                        except Exception:
-                            # Some OpenAI-compatible providers may not support "required"
-                            if self.provider == LLMProvider.ZAI and tools and "tool_choice" in create_kwargs:
-                                create_kwargs["tool_choice"] = "auto"
-                                response = await self.openai_client.chat.completions.create(**create_kwargs)
-                            else:
-                                raise
+                        create_kwargs["parallel_tool_calls"] = True
+                        response = await self.openai_client.chat.completions.create(**create_kwargs)
                     else:
                         create_kwargs = {
                             "model": self.model_name,
                             "messages": messages,
                             "tools": tools,
                             "temperature": 0.7,
+                            "parallel_tool_calls": True,
                         }
-                        if self.provider != LLMProvider.OPENROUTER:
-                            create_kwargs["parallel_tool_calls"] = True
-                        # ZAI: force tool calling when tools are available (otherwise it may only "suggest" tools in text)
-                        if self.provider == LLMProvider.ZAI and tools:
-                            create_kwargs["tool_choice"] = "required"
-                        try:
-                            response = await self.openai_client.chat.completions.create(**create_kwargs)
-                        except Exception:
-                            if self.provider == LLMProvider.ZAI and tools and "tool_choice" in create_kwargs:
-                                create_kwargs["tool_choice"] = "auto"
-                                response = await self.openai_client.chat.completions.create(**create_kwargs)
-                            else:
-                                raise
+                        response = await self.openai_client.chat.completions.create(**create_kwargs)
                     # usage recording
                     if hasattr(response, "usage") and response.usage:
-                        self.last_usage = {
-                            "prompt_tokens": int(response.usage.prompt_tokens or 0),
-                            "completion_tokens": int(response.usage.completion_tokens or 0),
-                            "total_tokens": int(response.usage.total_tokens or 0)
-                        }
+                        try:
+                            self.last_usage = {
+                                "prompt_tokens": int(response.usage.prompt_tokens or 0),
+                                "completion_tokens": int(response.usage.completion_tokens or 0),
+                                "total_tokens": int(response.usage.total_tokens or 0)
+                            }
+                        except (ValueError, TypeError):
+                            # Some models may return non-numeric usage data
+                            pass
             except OperationCancelled:
                 raise  # Re-raise to be handled by api.py
             except Exception as e:
@@ -1568,7 +1516,7 @@ class AgentRuntime:
             # Check for tool calls (non-streaming)
             if message.tool_calls:
                 # Add assistant message
-                messages.append({
+                assistant_msg = {
                     "role": "assistant",
                     "content": message.content or "",
                     "tool_calls": [
@@ -1582,7 +1530,14 @@ class AgentRuntime:
                         }
                         for tc in message.tool_calls
                     ]
-                })
+                }
+                # Include reasoning_content for models like kimi-k2.5 that require it
+                # Note: OpenRouter returns 'reasoning' but expects 'reasoning_content' in the request
+                if hasattr(message, 'reasoning') and message.reasoning:
+                    assistant_msg["reasoning_content"] = message.reasoning
+                elif hasattr(message, 'reasoning_content') and message.reasoning_content:
+                    assistant_msg["reasoning_content"] = message.reasoning_content
+                messages.append(assistant_msg)
 
                 # Tool execution (parallelized)
                 async def execute_one(tc):
@@ -1618,16 +1573,11 @@ class AgentRuntime:
             else:
                 # Return text response
                 content = message.content or ""
-                
-                # Z.ai / GLM-4.7: content might be empty but reasoning_content exists
-                if not content:
-                    # Check for direct attribute
-                    if hasattr(message, "reasoning_content") and message.reasoning_content:
-                        content = message.reasoning_content
-                    # Check in extra fields (standard OpenAI python lib behavior for unknown fields)
-                    elif hasattr(message, "model_extra") and message.model_extra and "reasoning_content" in message.model_extra:
-                        content = message.model_extra["reasoning_content"]
-                        
+                # Emit progress events for non-streaming mode (e.g., ZAI with tools)
+                if content and self.progress_callback:
+                    self.progress_callback(event_type="start", agent_name=self.name)
+                    self.progress_callback(event_type="chunk", content=content, agent_name=self.name)
+                    self.progress_callback(event_type="done", agent_name=self.name)
                 return content
 
         # If max_iterations is reached
@@ -1696,8 +1646,6 @@ class AgentRuntime:
         while True:
             if session_id:
                 check_cancelled(session_id)
-                if self.parent_session_id:
-                    check_cancelled(self.parent_session_id)
 
             try:
                 if self.stream:
@@ -1713,12 +1661,6 @@ class AgentRuntime:
                     function_calls = []
 
                     for chunk in response_stream:
-                        # Check cancellation during streaming
-                        if session_id:
-                            check_cancelled(session_id)
-                            if self.parent_session_id:
-                                check_cancelled(self.parent_session_id)
-                        
                         # Get usage information
                         if chunk.usage_metadata:
                             self.last_usage = {
