@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+スケジューラーテスト - 直接実行
+"""
+import asyncio
+import sys
+import os
+from pathlib import Path
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from moco.core.scheduler import MocoScheduler
+from moco.core.orchestrator import Orchestrator
+from moco.storage.scheduled_task_store import ScheduledTaskStore
+import httpx
+
+# API URL
+MOCO_API_URL = "http://localhost:8000/api/chat"
+
+async def main():
+    print("=" * 60)
+    print("Testing Moco Scheduler Direct Execution")
+    print("=" * 60)
+    
+    # Working directory
+    working_dir = os.getcwd()
+    print(f"Working directory: {working_dir}")
+    
+    # Database path
+    db_path = os.path.join(working_dir, "tasks.db")
+    print(f"Database path: {db_path}")
+    
+    # Check tasks
+    store = ScheduledTaskStore(db_path=db_path)
+    tasks = store.get_enabled_tasks()
+    print(f"Found {len(tasks)} enabled tasks")
+    for t in tasks:
+        print(f"  - {t['id']}: {t['description'][:40]} | next: {t['next_run']}")
+    
+    # Check due tasks
+    due_tasks = store.get_due_tasks()
+    print(f"Found {len(due_tasks)} due tasks that should execute now")
+    
+    if due_tasks:
+        print("\nExecuting due tasks...")
+        for task in due_tasks:
+            task_id = task['id']
+            description = task['description']
+            profile = task.get('profile', 'default')
+            
+            print(f"\nExecuting task {task_id}: {description}")
+            
+            try:
+                payload = {
+                    "message": description,
+                    "session_id": None,
+                    "profile": profile,
+                    "working_directory": working_dir
+                }
+                
+                print(f"Sending request to {MOCO_API_URL}...")
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(MOCO_API_URL, json=payload)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    result = data.get("response", "")
+                    artifacts = data.get("artifacts", [])
+                    print(f"✅ Task completed successfully")
+                    print(f"Result: {result[:200]}...")
+                    if artifacts:
+                        print(f"Generated {len(artifacts)} artifacts")
+                    
+                    # Mark task as completed
+                    store.complete_task(task_id)
+                    print(f"Task {task_id} marked as completed")
+                else:
+                    print(f"❌ Task failed with status {response.status_code}")
+                    print(f"Response: {response.text[:200]}")
+                    store.complete_task(task_id)
+                
+            except Exception as e:
+                print(f"❌ Error executing task {task_id}: {e}")
+                store.complete_task(task_id)
+    
+    print("\n" + "=" * 60)
+    print("Test completed")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)

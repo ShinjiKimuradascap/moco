@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from moco.storage.scheduled_task_store import ScheduledTaskStore
+from datetime import datetime
+
+def main():
+    store = ScheduledTaskStore(db_path="tasks.db")
+    
+    # Get enabled tasks
+    tasks = store.get_enabled_tasks()
+    print(f"Total enabled tasks: {len(tasks)}")
+    for t in tasks:
+        print(f"\nTask ID: {t['id']}")
+        print(f"Description: {t['description']}")
+        print(f"Cron: {t['cron']}")
+        print(f"Next run: {t['next_run']}")
+        print(f"Last run: {t['last_run']}")
+        print(f"Enabled: {t['enabled']}")
+        print(f"Working dir: {t.get('working_dir', 'N/A')}")
+    
+    # Get due tasks
+    print("\n" + "=" * 60)
+    due_tasks = store.get_due_tasks()
+    print(f"Due tasks: {len(due_tasks)}")
+    for t in due_tasks:
+        print(f"  - {t['id']}: {t['description'][:40]}")
+    
+    # Check current time
+    print(f"\nCurrent time: {datetime.now().isoformat()}")
+
+if __name__ == "__main__":
+    main()

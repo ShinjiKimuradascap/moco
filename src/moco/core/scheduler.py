@@ -102,7 +102,8 @@ class MocoScheduler:
                     "working_directory": working_dir
                 }
                 
-                async with httpx.AsyncClient(timeout=None) as client:
+                # タイムアウト: 5分（複雑なタスクでも5分以内に完了すべき）
+                async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
                     response = await client.post(MOCO_API_URL, json=payload)
                 
                 if response.status_code == 200:
