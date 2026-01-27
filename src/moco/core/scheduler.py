@@ -90,8 +90,9 @@ class MocoScheduler:
             
             try:
                 # moco ui の /api/chat にリクエストを投げる（WhatsAppと同じフロー）
-                # セッション名はタスクIDをそのまま使う（daily-news, slack-summary 等）
-                session_id = f"--{task_id}"
+                # セッションIDはタスクごとに固定（履歴を引き継ぐ）
+                # None を渡すと api.py が新しいセッションを作成する
+                session_id = None
                 working_dir = task.get('working_dir') or os.getcwd()
                 
                 payload = {
