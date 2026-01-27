@@ -13,7 +13,7 @@ def generate_image(
     prompt: str,
     input_image: str = None,
     output_dir: str = "generated_images",
-    model: str = "gemini-3.0-pro-image"
+    model: str = "gemini-3-pro-image-preview"
 ) -> str:
     """
     Google GenAI SDK (Gemini/Nano Banana Pro) を使用して画像を生成・編集し、ローカルに保存する。
@@ -22,8 +22,8 @@ def generate_image(
         prompt: 画像生成・編集のためのプロンプト
         input_image: 入力画像のパス（編集する場合に指定）
         output_dir: 画像の保存先ディレクトリ
-        model: 使用するモデル (default: gemini-3.0-pro-image)
-               - gemini-3.0-pro-image (Nano Banana Pro / Gemini 3 Pro)
+        model: 使用するモデル (default: gemini-3-pro-image-preview)
+               - gemini-3-pro-image-preview (Nano Banana Pro / Gemini 3 Pro Image Preview)
                - gemini-2.5-flash-preview-04-17 (Nano Banana)
                - gemini-2.0-flash-exp-image-generation (Gemini 2.0 Flash)
 
