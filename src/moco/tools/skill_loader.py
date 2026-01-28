@@ -440,7 +440,7 @@ class SkillLoader:
             for result in results:
                 # L2 距離が小さいほど類似度が高い
                 # threshold は距離の上限（小さい値 = より厳格）
-                # text-embedding-005 の場合、距離 < 0.8 が強く関連あり
+                # gemini-embedding-001 の場合、距離 < 0.8 が強く関連あり
                 score = result.get('score', float('inf'))
                 if score < 0.8:  # 距離が0.8未満なら強く関連あり（厳格化）
                     skill_name = result.get('metadata', {}).get('skill_name')

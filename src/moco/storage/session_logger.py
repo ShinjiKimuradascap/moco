@@ -27,9 +27,10 @@ except ImportError:
 DEFAULT_MAX_TOKENS = 8000
 
 def _get_summarize_model() -> str:
-    """要約用モデルを取得"""
-    from ..core.llm_provider import get_analyzer_model
-    return get_analyzer_model()
+    """要約用モデルを取得 (Google genai用のGeminiモデルを返す)"""
+    # session_loggerはGoogle genaiクライアントを直接使用するため、
+    # 常にGeminiモデルを返す必要がある
+    return os.environ.get("MOCO_SUMMARIZE_MODEL", "gemini-2.0-flash")
 
 
 def _get_default_db_path() -> str:
