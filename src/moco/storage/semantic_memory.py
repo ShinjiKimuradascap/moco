@@ -17,7 +17,7 @@ except ImportError:
     genai = None
     GENAI_AVAILABLE = False
 
-DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-005"
 
 class SemanticMemory:
     """
@@ -28,7 +28,7 @@ class SemanticMemory:
     def __init__(self, db_path: str, embedding_model: str = DEFAULT_EMBEDDING_MODEL):
         self.db_path = db_path
         self.embedding_model = embedding_model
-        self.dimension = 768  # text-embedding-004 dimension
+        self.dimension = 768  # text-embedding-005 dimension
         self.index = faiss.IndexFlatL2(self.dimension)
         self.doc_ids = []  # List to map index position to doc_id
         
