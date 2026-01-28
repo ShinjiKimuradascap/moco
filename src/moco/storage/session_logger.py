@@ -538,25 +538,28 @@ class SessionLogger:
                         except:
                             result.append({"role": role, "parts": [content]})
                     elif db_role == "tool":
-                        # Gemini tool results are also complex to reconstruct perfectly from JSON here
-                        # without the original declaration.
+                        # Gemini doesn't accept 'tool' role directly in history.
+                        # Tool results should be sent as 'user' role with function_response parts.
+                        # However, perfectly reconstructing this requires the original function name.
+                        # For simplicity, we skip tool results in Gemini history as the model
+                        # should have already processed them in the same turn.
+                        # Alternatively, include as a text summary for context.
                         try:
                             data = json.loads(content)
-                            if isinstance(data, dict) and "tool_name" in data:
-                                # Reconstruct Gemini-friendly part dict
+                            if isinstance(data, dict) and "content" in data:
+                                # Include as a text note in user role for context
+                                tool_id = data.get("tool_call_id", "unknown")
+                                tool_content = data.get("content", "")
+                                # Truncate long tool results
+                                if len(tool_content) > 500:
+                                    tool_content = tool_content[:500] + "...(truncated)"
                                 result.append({
-                                    "role": "tool",
-                                    "parts": [{
-                                        "function_response": {
-                                            "name": data["tool_name"],
-                                            "response": json.loads(data["content"]) if isinstance(data["content"], str) and data["content"].startswith("{") else {"result": data["content"]}
-                                        }
-                                    }]
+                                    "role": "user", 
+                                    "parts": [f"[Previous tool result ({tool_id})]: {tool_content}"]
                                 })
-                            else:
-                                result.append({"role": "tool", "parts": [content]})
                         except:
-                            result.append({"role": "tool", "parts": [content]})
+                            # Skip malformed tool messages
+                            pass
                     else:
                         result.append({"role": role, "parts": [content]})
 
