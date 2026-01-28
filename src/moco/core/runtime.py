@@ -646,7 +646,8 @@ class AgentRuntime:
         semantic_memory: Optional[SemanticMemory] = None,
         skills: Optional[List[SkillConfig]] = None,
         memory_service = None,
-        system_prompt_override: Optional[str] = None
+        system_prompt_override: Optional[str] = None,
+        session_logger = None
     ):
         self.config = config
         self.tool_map = tool_map
@@ -658,6 +659,7 @@ class AgentRuntime:
         self.skills: List[SkillConfig] = skills or []
         self.memory_service = memory_service
         self.system_prompt_override = system_prompt_override
+        self.session_logger = session_logger
         
         # Memory context (dynamically updated in run())
         self._memory_context = ""
@@ -866,6 +868,36 @@ class AgentRuntime:
         context_header += "---\n\n"
 
         prompt = self.system_prompt_override or self.config.system_prompt
+        
+        # 委譲に関する基本ルールを追加（orchestrator エージェントの場合）
+        if self.agent_name == "orchestrator" and "delegate_to_agent" in str(self.tool_map.keys()):
+            delegation_rules = """
+
+## サブエージェント委譲ルール（重要）
+
+委譲を実行するには、以下の**いずれか**の方法を使用：
+
+### 方法1: ツールコール（推奨）
+```
+delegate_to_agent(agent_name="code-reviewer", task="このコードをレビューして")
+```
+
+### 方法2: テキストパターン（行頭に記述）
+```
+@code-reviewer このコードをレビューして
+```
+
+### ❌ 間違った方法（委譲されない）
+- 「`@agent` に依頼する」と計画を書くだけ → 実行されない
+- バッククォート内の `@agent` → 検出されない
+- `@orchestrator:` → 自分自身への委譲は無視される
+
+### ✅ 正しい方法
+実際に委譲を実行するには、上記の方法1または方法2を**必ず実行**すること。
+計画を書くだけでは委譲は発動しない。
+
+"""
+            prompt += delegation_rules
 
         # Injection of Skills
         if self.skills:
@@ -1022,6 +1054,27 @@ class AgentRuntime:
 
         # Context limit check
         result = self._update_context_usage(result)
+        
+        # Transcript logging: Record full tool call and result for context recovery
+        if self.session_logger and session_id:
+            try:
+                # Log tool call
+                args_json = json.dumps(args_dict, ensure_ascii=False, default=str)
+                self.session_logger.append_to_transcript(
+                    session_id,
+                    "tool_call",
+                    f"{func_name} with arguments {args_json}",
+                    agent_name=self.agent_name
+                )
+                # Log full result (no truncation for transcript)
+                self.session_logger.append_to_transcript(
+                    session_id,
+                    "tool_result",
+                    str(result) if result else "(empty)",
+                    agent_name=self.agent_name
+                )
+            except Exception:
+                pass  # Don't fail on logging errors
         
         # Memory: Record tool execution event
         if self.memory_service and session_id:
