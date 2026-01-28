@@ -423,7 +423,7 @@ class Orchestrator:
             history_format = "openai" if self.provider in (LLMProvider.OPENAI, LLMProvider.OPENROUTER) else "gemini"
             history = self.session_logger.get_agent_history(
                 session_id,
-                limit=20,
+                limit=20,  # Now means 20 TURNS (user messages), including all tool calls
                 format=history_format
             )
 

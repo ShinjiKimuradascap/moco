@@ -1474,6 +1474,13 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                         if collected_reasoning:
                             assistant_msg["reasoning_content"] = collected_reasoning
                         messages.append(assistant_msg)
+                        
+                        # Log assistant message with tool calls to session history
+                        if session_id and self.session_logger:
+                            self.session_logger.log_agent_message(
+                                session_id, "assistant", 
+                                json.dumps(assistant_msg, ensure_ascii=False)
+                            )
 
                         for tc in tool_calls_list:
                             func_name = tc["function"]["name"]
@@ -1497,11 +1504,14 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                                 else:
                                     result = await self._execute_tool_with_tracking(func_name, args_dict, session_id)
 
-                            messages.append({
+                            tool_msg = {
                                 "role": "tool",
                                 "tool_call_id": tc["id"],
                                 "content": str(result)
-                            })
+                            }
+                            messages.append(tool_msg)
+                            if session_id:
+                                self.session_logger.log_agent_message(session_id, "tool", json.dumps(tool_msg, ensure_ascii=False))
                         
                         # Compress context when exceeding 80%
                         usage_ratio = self._accumulated_tokens / MAX_CONTEXT_TOKENS
@@ -1591,6 +1601,8 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                 elif hasattr(message, 'reasoning_content') and message.reasoning_content:
                     assistant_msg["reasoning_content"] = message.reasoning_content
                 messages.append(assistant_msg)
+                if session_id:
+                    self.session_logger.log_agent_message(session_id, "assistant", json.dumps(assistant_msg, ensure_ascii=False))
 
                 # Tool execution (parallelized)
                 async def execute_one(tc):
@@ -1601,11 +1613,15 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                         result = "Error: tool call arguments are invalid JSON (expected a single JSON object)"
                     else:
                         result = await self._execute_tool_with_tracking(func_name, args_dict, session_id)
-                    return {
+                    
+                    tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": str(result)
                     }
+                    if session_id:
+                        self.session_logger.log_agent_message(session_id, "tool", json.dumps(tool_msg, ensure_ascii=False))
+                    return tool_msg
 
                 tasks = [execute_one(tc) for tc in message.tool_calls]
                 tool_results = await asyncio.gather(*tasks)
@@ -1763,8 +1779,23 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
 
                     if function_calls:
                         messages.append(types.Content(role="model", parts=collected_parts))
+                        if session_id:
+                            # Log assistant message (convert to dict for consistency)
+                            assistant_msg = {
+                                "role": "assistant",
+                                "content": collected_text,
+                                "tool_calls": [
+                                    {
+                                        "id": f"call_{i}",
+                                        "type": "function",
+                                        "function": {"name": fc.name, "arguments": json.dumps(fc.args, ensure_ascii=False)}
+                                    } for i, fc in enumerate(function_calls)
+                                ]
+                            }
+                            self.session_logger.log_agent_message(session_id, "assistant", json.dumps(assistant_msg, ensure_ascii=False))
+
                         # Tool execution (parallelized)
-                        async def execute_one(fc):
+                        async def execute_one(i, fc):
                             func_name = fc.name
                             args = fc.args
                             args_dict = {}
@@ -1775,6 +1806,16 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                                     args_dict = args
                             
                             result = await self._execute_tool_with_tracking(func_name, args_dict, session_id)
+                            
+                            if session_id:
+                                tool_msg = {
+                                    "role": "tool",
+                                    "tool_call_id": f"call_{i}",
+                                    "tool_name": func_name,
+                                    "content": json.dumps({"result": _ensure_jsonable(result)}, ensure_ascii=False)
+                                }
+                                self.session_logger.log_agent_message(session_id, "tool", json.dumps(tool_msg, ensure_ascii=False))
+
                             return types.Part(
                                 function_response=types.FunctionResponse(
                                     name=func_name,
@@ -1782,7 +1823,7 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                                 )
                             )
 
-                        tasks = [execute_one(fc) for fc in function_calls]
+                        tasks = [execute_one(i, fc) for i, fc in enumerate(function_calls)]
                         tool_responses = await asyncio.gather(*tasks)
                         messages.append(types.Content(role="tool", parts=tool_responses))
                         continue
@@ -1813,6 +1854,20 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                         return "Error: Empty response content from Gemini."
 
                     messages.append(message)
+                    if session_id:
+                        # Log assistant message
+                        assistant_msg = {
+                            "role": "assistant",
+                            "content": message.parts[0].text if message.parts and hasattr(message.parts[0], 'text') else "",
+                            "tool_calls": [
+                                {
+                                    "id": f"call_{i}",
+                                    "type": "function",
+                                    "function": {"name": fc.name, "arguments": json.dumps(fc.args, ensure_ascii=False)}
+                                } for i, fc in enumerate(function_calls)
+                            ]
+                        }
+                        self.session_logger.log_agent_message(session_id, "assistant", json.dumps(assistant_msg, ensure_ascii=False))
                     
                     for part in message.parts or []:
                         if hasattr(part, 'thought') and part.thought and part.text:
@@ -1828,7 +1883,7 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                     function_calls = [p.function_call for p in message.parts if p.function_call]
                     if function_calls:
                         # Tool execution (parallelized)
-                        async def execute_one(fc):
+                        async def execute_one(i, fc):
                             func_name = fc.name
                             args = fc.args
                             args_dict = {}
@@ -1839,6 +1894,16 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                                     args_dict = args
                             
                             result = await self._execute_tool_with_tracking(func_name, args_dict, session_id)
+
+                            if session_id:
+                                tool_msg = {
+                                    "role": "tool",
+                                    "tool_call_id": f"call_{i}",
+                                    "tool_name": func_name,
+                                    "content": json.dumps({"result": _ensure_jsonable(result)}, ensure_ascii=False)
+                                }
+                                self.session_logger.log_agent_message(session_id, "tool", json.dumps(tool_msg, ensure_ascii=False))
+
                             return types.Part(
                                 function_response=types.FunctionResponse(
                                     name=func_name,
@@ -1846,7 +1911,7 @@ delegate_to_agent(agent_name="code-reviewer", task="このコードをレビュ�
                                 )
                             )
 
-                        tasks = [execute_one(fc) for fc in function_calls]
+                        tasks = [execute_one(i, fc) for i, fc in enumerate(function_calls)]
                         tool_responses = await asyncio.gather(*tasks)
                         messages.append(types.Content(role="tool", parts=tool_responses))
                         continue

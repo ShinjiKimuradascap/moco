@@ -478,11 +478,87 @@ class SessionLogger:
 
             # Add recent messages
             for msg in messages:
-                role = "user" if msg["role"] == "user" else ("model" if format == "gemini" else "assistant")
-                if format == "gemini":
-                    result.append({"role": role, "parts": [msg["content"]]})
+                db_role = msg["role"]
+                content = msg["content"]
+                
+                if format == "openai":
+                    if db_role == "user":
+                        result.append({"role": "user", "content": content})
+                    elif db_role == "assistant":
+                        # content might be text or JSON with tool_calls
+                        try:
+                            if content.startswith("{") and "tool_calls" in content:
+                                data = json.loads(content)
+                                result.append({
+                                    "role": "assistant",
+                                    "content": data.get("content"),
+                                    "tool_calls": data.get("tool_calls")
+                                })
+                            else:
+                                result.append({"role": "assistant", "content": content})
+                        except:
+                            result.append({"role": "assistant", "content": content})
+                    elif db_role == "tool":
+                        try:
+                            data = json.loads(content)
+                            if isinstance(data, dict) and "tool_call_id" in data:
+                                result.append({
+                                    "role": "tool",
+                                    "tool_call_id": data["tool_call_id"],
+                                    "content": data.get("content", "")
+                                })
+                            else:
+                                result.append({"role": "tool", "content": content})
+                        except:
+                             result.append({"role": "tool", "content": content})
+                    else:
+                        # Fallback for other roles
+                        result.append({"role": db_role, "content": content})
                 else:
-                    result.append({"role": role, "content": msg["content"]})
+                    # Gemini format
+                    role = "user" if db_role == "user" else ("model" if db_role == "assistant" else db_role)
+                    
+                    if db_role == "assistant":
+                        try:
+                            if content.startswith("{") and "tool_calls" in content:
+                                # Tool calls in Gemini format need to be converted to FunctionCall parts
+                                # For now, we just append as text or skip if complex
+                                # Better to try parsing and creating parts if possible
+                                data = json.loads(content)
+                                parts = []
+                                if data.get("content"):
+                                    parts.append(data["content"])
+                                # Note: converting tool_calls to Gemini parts is complex
+                                # simplified: just use the text if present
+                                if not parts:
+                                    parts.append(content)
+                                result.append({"role": role, "parts": parts})
+                            else:
+                                result.append({"role": role, "parts": [content]})
+                        except:
+                            result.append({"role": role, "parts": [content]})
+                    elif db_role == "tool":
+                        # Gemini tool results are also complex to reconstruct perfectly from JSON here
+                        # without the original declaration.
+                        try:
+                            data = json.loads(content)
+                            if isinstance(data, dict) and "tool_name" in data:
+                                # Reconstruct Gemini-friendly part dict
+                                result.append({
+                                    "role": "tool",
+                                    "parts": [{
+                                        "function_response": {
+                                            "name": data["tool_name"],
+                                            "response": json.loads(data["content"]) if isinstance(data["content"], str) and data["content"].startswith("{") else {"result": data["content"]}
+                                        }
+                                    }]
+                                })
+                            else:
+                                result.append({"role": "tool", "parts": [content]})
+                        except:
+                            result.append({"role": "tool", "parts": [content]})
+                    else:
+                        result.append({"role": role, "parts": [content]})
 
             return result
 
@@ -495,26 +571,49 @@ class SessionLogger:
         return self._get_recent_messages(session_id, limit)
 
     def _get_recent_messages(self, session_id: str, limit: int) -> List[Dict[str, Any]]:
-        """Get recent messages from DB."""
+        """Get recent messages from DB.
+        
+        Args:
+            session_id: Session ID
+            limit: Number of TURNS (user messages) to retrieve, not raw message count.
+                   All associated assistant/tool messages for each turn are included.
+        """
         try:
             with self._lock:
                 conn = self._get_connection()
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
 
+                # First, get the timestamps of the last N user messages (turns)
                 cursor.execute("""
-                    SELECT role, content, agent_id, timestamp
-                    FROM agent_messages
-                    WHERE session_id = ?
+                    SELECT timestamp FROM agent_messages
+                    WHERE session_id = ? AND role = 'user'
                     ORDER BY timestamp DESC
                     LIMIT ?
                 """, (session_id, limit))
+                
+                user_timestamps = cursor.fetchall()
+                
+                if not user_timestamps:
+                    conn.close()
+                    return []
+                
+                # Get the oldest user message timestamp from our selection
+                oldest_turn_timestamp = user_timestamps[-1][0]
+                
+                # Now get ALL messages from that timestamp onwards
+                # This includes all tool calls and results for each turn
+                cursor.execute("""
+                    SELECT role, content, agent_id, timestamp
+                    FROM agent_messages
+                    WHERE session_id = ? AND timestamp >= ?
+                    ORDER BY timestamp ASC
+                """, (session_id, oldest_turn_timestamp))
 
                 rows = cursor.fetchall()
                 conn.close()
 
-            # Reverse to get oldest first
-            return [dict(row) for row in reversed(rows)]
+            return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to get messages: {e}")
             return []
